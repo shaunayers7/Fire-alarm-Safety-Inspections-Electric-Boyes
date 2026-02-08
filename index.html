@@ -4,145 +4,135 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#2563eb">
-    <title>Fire-Doc V2 | Professional Inspection Suite</title>
+    <title>Fire-Doc V2 | Professional Inspector</title>
     
-    <!-- PWA Metadata - Ensure these files exist in your root folder -->
+    <!-- PWA -->
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1042/1042680.png">
     
-    <!-- Core Dependencies -->
+    <!-- Styles -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
     
-    <!-- React and Babel (Necessary for browser-side JSX compilation) -->
+    <!-- React & Babel -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Firebase Compat SDKs (Standard for single-file CDN usage) -->
+    <!-- Firebase Compat -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 
     <style>
         body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
         .active-scale-95:active { transform: scale(0.95); }
         .active-scale-98:active { transform: scale(0.98); }
-        #pwa-toast {
-            visibility: hidden;
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1000;
-        }
-        #pwa-toast.show { visibility: visible; animation: fadeInUp 0.5s ease-out; }
-        @keyframes fadeInUp { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
     </style>
 </head>
 <body class="bg-slate-50">
     <div id="root"></div>
 
-    <!-- PWA Install Prompt -->
-    <div id="pwa-toast" class="bg-blue-600 text-white px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-4">
-        <span class="text-xs font-bold">Add to Home Screen?</span>
-        <button id="install-button" class="bg-white text-blue-600 px-4 py-1 rounded-full text-[10px] font-black uppercase">Install</button>
-    </div>
-
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-        
+
+        // Configuration
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "" };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'fire-doc-v3-prod';
+        const TARGET_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/11lj4d0lemmAo9h1xgfXxLtWviTHD4syF";
+
+        // Initialize Firebase
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        const DEVICE_TYPES = [
+            { code: 'H', label: 'Manual Pull Station' },
+            { code: 'S', label: 'Smoke Detector' },
+            { code: 'HT', label: 'Heat Detector' },
+            { code: 'FS', label: 'Flow Switch' },
+            { code: 'TS', label: 'Tamper Switch' },
+            { code: 'B', label: 'Bell' },
+            { code: 'V', label: 'Visual/Strobe' }
+        ];
+
         const Icon = ({ name, size = 16, className = "" }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
-        // Firebase Setup
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "" };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'fire-doc-v2-prod';
-
-        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        const auth = firebase.auth();
-
         const App = () => {
             const [user, setUser] = useState(null);
             const [inspections, setInspections] = useState([]);
-            const [view, setView] = useState('years'); 
+            const [view, setView] = useState('years');
             const [activeYear, setActiveYear] = useState('2025');
+            const [selectedBuildingId, setSelectedBuildingId] = useState(null);
+            const [openSections, setOpenSections] = useState({ details: true });
             const [loading, setLoading] = useState(true);
 
-            // 1. Authentication Lifecycle
+            // Auth Logic
             useEffect(() => {
                 const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await auth.signInWithCustomToken(__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
-                        }
-                    } catch (e) { 
-                        console.error("Auth initialization failed:", e); 
-                        setLoading(false);
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously();
                     }
                 };
                 initAuth();
-                const unsubscribe = auth.onAuthStateChanged((u) => {
-                    setUser(u);
-                    if (u) setLoading(false);
-                });
-                return () => unsubscribe();
+                const unsub = auth.onAuthStateChanged(u => { setUser(u); if(u) setLoading(false); });
+                return () => unsub();
             }, []);
 
-            // 2. Data Synchronization & Baseline Logic
+            // Data Logic
             useEffect(() => {
                 if (!user) return;
                 const path = `artifacts/${appId}/public/data/inspections`;
-                const unsubscribe = db.collection(path).onSnapshot(snap => {
+                const unsub = db.collection(path).onSnapshot(snap => {
                     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    
-                    if (docs.length === 0) {
-                        // Ensure the screen is never blank by providing a first record
-                        db.collection(path).add({
-                            name: "LDS Church Welling FM Group",
-                            year: "2025",
-                            address: "Champion, Alberta",
-                            completed: false,
-                            timestamp: Date.now()
-                        });
-                    } else {
-                        setInspections(docs);
-                    }
-                    setLoading(false);
-                }, err => {
-                    console.error("Firestore connectivity error:", err);
-                    setLoading(false);
+                    if (docs.length === 0) createBaseline();
+                    else setInspections(docs);
                 });
-                return () => unsubscribe();
+                return () => unsub();
             }, [user]);
 
-            if (loading) {
-                return (
-                    <div className="min-h-screen flex items-center justify-center bg-slate-50">
-                        <div className="text-center">
-                            <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Initializing Secure Session</p>
-                        </div>
-                    </div>
-                );
-            }
+            const createBaseline = async () => {
+                const docRef = db.collection(`artifacts/${appId}/public/data/inspections`).doc('baseline-church');
+                await docRef.set({
+                    year: '2025',
+                    name: 'LDS Church Welling FM Group',
+                    inspector: '',
+                    address: 'Champion, Alberta',
+                    isMonitored: true,
+                    monitoringPhone: '403-555-0199',
+                    preJob: [{ id: 'pj1', label: 'Occupants Informed', value: true, notes: '' }],
+                    devices: [{ id: 'd1', deviceNum: '1', location: 'Main Entrance', type: 'S', status: 'pass', notes: '' }],
+                    emergencyLights: [{ id: 'el1', unitNum: '1', unit: 'Pack 1', location: 'Exit A', pass: true }],
+                    batteries: { physicalCondition: 'Good', notes: '' },
+                    completed: false
+                });
+            };
+
+            const activeBuilding = inspections.find(b => b.id === selectedBuildingId);
+
+            const updateBuilding = async (updates) => {
+                if (!selectedBuildingId) return;
+                await db.collection(`artifacts/${appId}/public/data/inspections`).doc(selectedBuildingId).update(updates);
+            };
+
+            if (loading) return <div className="h-screen flex items-center justify-center font-black text-slate-300">SYNCING PROTOCOL...</div>;
 
             if (view === 'years') {
                 return (
-                    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50">
-                        <img src="https://cdn-icons-png.flaticon.com/512/1042/1042680.png" className="w-20 h-20 mb-6 shadow-2xl rounded-3xl" alt="Logo" />
-                        <h1 className="text-3xl font-black text-slate-800 uppercase mb-2 tracking-tighter">Fire-Doc</h1>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-10">Professional Inspection Suite</p>
+                    <div className="min-h-screen flex flex-col items-center justify-center p-6">
+                        <div className="bg-blue-600 p-5 rounded-[30px] shadow-2xl mb-6"><Icon name="shield-check" size={48} className="text-white" /></div>
+                        <h1 className="text-3xl font-black uppercase mb-10 tracking-tighter">Fire-Doc V2</h1>
                         <div className="w-full max-w-xs space-y-4">
-                            {['2024', '2025', '2026'].map(year => (
-                                <button key={year} onClick={() => { setActiveYear(year); setView('buildings'); }} 
-                                    className="w-full bg-white p-6 rounded-[32px] shadow-sm flex items-center justify-between font-black text-slate-700 active-scale-95 border border-slate-100 transition-all">
-                                    <span className="flex items-center gap-3"><Icon name="calendar" className="text-blue-500" /> {year} CYCLE</span>
+                            {['2024', '2025', '2026'].map(y => (
+                                <button key={y} onClick={() => { setActiveYear(y); setView('buildings'); }} className="w-full bg-white p-6 rounded-[30px] shadow-sm flex items-center justify-between font-black active-scale-95 border border-slate-100">
+                                    <span className="flex items-center gap-3"><Icon name="calendar" className="text-blue-500" /> {y} CYCLE</span>
                                     <Icon name="chevron-right" className="text-slate-300" />
                                 </button>
                             ))}
@@ -154,32 +144,103 @@
             if (view === 'buildings') {
                 const filtered = inspections.filter(i => i.year === activeYear);
                 return (
-                    <div className="min-h-screen bg-slate-50">
-                        <header className="bg-blue-600 text-white p-10 pb-20 rounded-b-[60px] shadow-xl relative overflow-hidden">
-                            <div className="absolute top-[-20px] right-[-20px] w-40 h-40 bg-white/10 rounded-full blur-3xl"></div>
+                    <div className="min-h-screen">
+                        <header className="bg-blue-600 text-white p-10 pb-20 rounded-b-[50px] shadow-xl">
                             <button onClick={() => setView('years')} className="text-[10px] font-black uppercase opacity-60 mb-4 flex items-center gap-2">
                                 <Icon name="arrow-left" size={12} /> Back
                             </button>
                             <h2 className="text-3xl font-black uppercase tracking-tight">{activeYear} Properties</h2>
                         </header>
-                        <div className="p-6 -mt-10 space-y-4 pb-24">
-                            {filtered.length > 0 ? filtered.map(b => (
-                                <div key={b.id} className="bg-white p-6 rounded-[35px] shadow-lg flex items-center justify-between active-scale-98 transition-all border border-slate-50">
+                        <div className="p-6 -mt-10 space-y-4">
+                            {filtered.map(b => (
+                                <div key={b.id} onClick={() => { setSelectedBuildingId(b.id); setView('inspect'); }} className="bg-white p-6 rounded-[35px] shadow-lg flex items-center justify-between active-scale-98 border border-slate-50">
                                     <div className="flex items-center gap-5">
-                                        <div className="bg-blue-50 p-4 rounded-2xl text-blue-600 shadow-inner"><Icon name="building" size={28} /></div>
+                                        <div className={`p-4 rounded-2xl ${b.completed ? 'bg-green-100 text-green-600' : 'bg-blue-50 text-blue-600'}`}><Icon name="building" size={28} /></div>
                                         <div>
                                             <h3 className="font-black text-slate-800 uppercase leading-tight text-sm">{b.name}</h3>
-                                            <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{b.address || 'Address Not Set'}</p>
+                                            <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">{b.address}</p>
                                         </div>
                                     </div>
                                     <Icon name="chevron-right" className="text-slate-200" />
                                 </div>
-                            )) : (
-                                <div className="bg-white/50 border-2 border-dashed border-slate-200 rounded-[40px] p-16 text-center">
-                                    <Icon name="search" size={40} className="mx-auto text-slate-200 mb-4" />
-                                    <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">No Buildings Indexed</p>
+                            ))}
+                        </div>
+                    </div>
+                );
+            }
+
+            if (view === 'inspect' && activeBuilding) {
+                return (
+                    <div className="min-h-screen pb-32">
+                        <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md p-4 border-b flex items-center justify-between">
+                            <button onClick={() => setView('buildings')} className="p-2 text-slate-400"><Icon name="x" /></button>
+                            <div className="text-center">
+                                <p className="text-[10px] font-black uppercase text-blue-600 tracking-widest">Inspection Live</p>
+                                <h3 className="text-[11px] font-black text-slate-800 uppercase truncate max-w-[180px]">{activeBuilding.name}</h3>
+                            </div>
+                            <button onClick={() => updateBuilding({ completed: true })} className="bg-blue-600 text-white p-2 rounded-xl"><Icon name="save" size={18} /></button>
+                        </header>
+
+                        <div className="p-4 space-y-4">
+                            {/* Section: Building Details */}
+                            <div className="bg-white rounded-[35px] shadow-sm border overflow-hidden">
+                                <button onClick={() => setOpenSections(s => ({...s, details: !s.details}))} className="w-full p-6 bg-slate-800 text-white flex justify-between items-center">
+                                    <span className="font-black text-[10px] uppercase tracking-widest">1. Building Details</span>
+                                    <Icon name={openSections.details ? "chevron-up" : "chevron-down"} />
+                                </button>
+                                {openSections.details && (
+                                    <div className="p-6 space-y-4">
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Inspector Name</label>
+                                            <input className="w-full bg-slate-50 p-4 rounded-2xl text-sm font-bold mt-1 outline-none focus:ring-2 ring-blue-100" 
+                                                defaultValue={activeBuilding.inspector} 
+                                                onBlur={(e) => updateBuilding({ inspector: e.target.value })} 
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[9px] font-black text-slate-400 uppercase ml-2">Property Address</label>
+                                            <input className="w-full bg-slate-50 p-4 rounded-2xl text-sm font-bold mt-1 outline-none" 
+                                                defaultValue={activeBuilding.address} 
+                                                onBlur={(e) => updateBuilding({ address: e.target.value })} 
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Section: Devices */}
+                            <div className="bg-white rounded-[35px] shadow-sm border overflow-hidden">
+                                <button className="w-full p-6 bg-blue-600 text-white flex justify-between items-center">
+                                    <span className="font-black text-[10px] uppercase tracking-widest">4. Device Inventory ({activeBuilding.devices.length})</span>
+                                    <Icon name="list" />
+                                </button>
+                                <div className="p-4 space-y-3">
+                                    {activeBuilding.devices.map(dev => (
+                                        <div key={dev.id} className="p-4 bg-slate-50 rounded-2xl flex items-center justify-between border border-slate-100">
+                                            <div className="flex items-center gap-3">
+                                                <div className="bg-white w-10 h-10 rounded-full flex items-center justify-center font-black text-blue-600 shadow-sm text-xs">{dev.deviceNum}</div>
+                                                <div>
+                                                    <p className="text-[10px] font-black uppercase">{dev.location}</p>
+                                                    <p className="text-[8px] font-bold text-slate-400">{DEVICE_TYPES.find(t => t.code === dev.type)?.label}</p>
+                                                </div>
+                                            </div>
+                                            <button className={`p-2 rounded-xl ${dev.status === 'pass' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                                <Icon name={dev.status === 'pass' ? "check-circle" : "alert-circle"} />
+                                            </button>
+                                        </div>
+                                    ))}
                                 </div>
-                            )}
+                            </div>
+                        </div>
+
+                        {/* Bottom Actions */}
+                        <div className="fixed bottom-6 left-6 right-6 flex gap-3">
+                            <button onClick={() => window.open(TARGET_FOLDER_URL)} className="flex-1 bg-white p-4 rounded-2xl shadow-xl font-black text-[10px] uppercase flex items-center justify-center gap-2 border">
+                                <Icon name="cloud" className="text-blue-500" /> Sync Cloud
+                            </button>
+                            <button className="flex-1 bg-slate-900 text-white p-4 rounded-2xl shadow-xl font-black text-[10px] uppercase flex items-center justify-center gap-2">
+                                <Icon name="file-text" /> Export PDF
+                            </button>
                         </div>
                     </div>
                 );
@@ -191,35 +252,13 @@
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
 
-        // --- SERVICE WORKER & PWA REGISTRATION ---
+        // SW Registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('sw.js').then(reg => {
-                    console.log('SW Registered', reg);
-                }).catch(err => console.log('SW Failed', err));
+                navigator.serviceWorker.register('sw.js').catch(e => console.error(e));
             });
         }
-
-        let deferredPrompt;
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            const toast = document.getElementById('pwa-toast');
-            if(toast) setTimeout(() => toast.classList.add('show'), 3000);
-        });
-
-        document.getElementById('install-button')?.addEventListener('click', async () => {
-            if (deferredPrompt) {
-                deferredPrompt.prompt();
-                const { outcome } = await deferredPrompt.userChoice;
-                deferredPrompt = null;
-                document.getElementById('pwa-toast').classList.remove('show');
-            }
-        });
     </script>
-    
-    <!-- Deferred Libraries -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </body>
 </html>
