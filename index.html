@@ -3,130 +3,132 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#2563eb">
     <title>Fire-Doc V2 | Professional Inspection Suite</title>
     
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Link to the Manifest JSON you shared -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1042/1042680.png">
     
-    <!-- React & Babel -->
+    <!-- CSS and Fonts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <!-- React and Babel CDNs -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-
-    <!-- PDF Libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script>
-    
-    <!-- Firebase -->
+    <!-- Firebase Compat SDKs -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 
     <style>
-        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: contain; }
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
-        .active-ring { outline: 3px solid #3b82f6; outline-offset: 2px; }
+        .active-scale-95:active { transform: scale(0.95); }
+        .active-scale-98:active { transform: scale(0.98); }
+        
+        /* PWA Install Prompt Simulation */
+        #pwa-toast {
+            visibility: hidden;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+        }
+        #pwa-toast.show { visibility: visible; animation: fadeInUp 0.5s ease-out; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
     </style>
 </head>
-<body class="bg-slate-50 antialiased">
+<body class="bg-slate-50">
     <div id="root"></div>
+
+    <!-- PWA Install Prompt -->
+    <div id="pwa-toast" class="bg-blue-600 text-white px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-4">
+        <span class="text-xs font-bold">Add to Home Screen?</span>
+        <button onclick="this.parentElement.classList.remove('show')" class="bg-white text-blue-600 px-4 py-1 rounded-full text-[10px] font-black uppercase">Install</button>
+    </div>
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-
-        // Environment Mocking (using empty strings as per instructions)
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "" };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'fire-doc-v2-default';
-
-        // Firebase Initialization
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
-        const auth = firebase.auth();
-
-        const DEVICE_TYPES = [
-            { code: 'H', label: 'Manual Pull Station' },
-            { code: 'S', label: 'Smoke Detector' },
-            { code: 'B', label: 'Bell' },
-            { code: 'V', label: 'Visual Appliance' }
-        ];
-
+        
+        // Icon Helper
         const Icon = ({ name, size = 16, className = "" }) => {
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
+        // Firebase Config
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "" };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'fire-alarm-inspector-v3';
+
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+
+        const TARGET_FOLDER_URL = "https://drive.google.com/drive/u/0/folders/11lj4d0lemmAo9h1xgfXxLtWviTHD4syF";
+
+        const DEVICE_TYPES = [
+            { code: 'H', label: 'Manual Pull Station' },
+            { code: 'S', label: 'Smoke Detector' },
+            { code: 'FS', label: 'Flow Switch' },
+            { code: 'TS', label: 'Tamper Switch' },
+            { code: 'B', label: 'Bell' },
+            { code: 'V', label: 'Visual Appliance' }
+        ];
+
         const App = () => {
             const [user, setUser] = useState(null);
-            const [view, setView] = useState('years');
-            const [activeYear, setActiveYear] = useState('2025');
             const [inspections, setInspections] = useState([]);
+            const [allMedia, setAllMedia] = useState([]);
+            const [view, setView] = useState('years'); 
             const [selectedBuildingId, setSelectedBuildingId] = useState(null);
+            const [activeYear, setActiveYear] = useState('2025');
+            const fileInputRef = useRef(null);
+            
+            const [dialogue, setDialogue] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
+            const [openSections, setOpenSections] = useState({ details: true });
 
-            // Auth Logic
             useEffect(() => {
                 const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await auth.signInWithCustomToken(__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
-                        }
-                    } catch (e) { console.error("Auth error", e); }
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously();
+                    }
                 };
                 initAuth();
-                const unsub = auth.onAuthStateChanged(setUser);
-                return unsub;
+                const unsubscribe = auth.onAuthStateChanged(setUser);
+                return () => unsubscribe();
             }, []);
 
-            // Data Sync
             useEffect(() => {
                 if (!user) return;
                 const path = `artifacts/${appId}/public/data/inspections`;
-                const unsub = db.collection(path).onSnapshot(snap => {
-                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                    if (data.length === 0) createBaseline();
-                    else setInspections(data);
+                return db.collection(path).onSnapshot(snap => {
+                    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setInspections(docs);
                 });
-                return unsub;
             }, [user]);
 
-            const createBaseline = async () => {
-                const docId = 'welling-church-001';
-                const baseline = {
-                    year: '2025',
-                    name: 'LDS Church Welling',
-                    inspector: 'Assigned Inspector',
-                    completed: false,
-                    lastUpdated: Date.now()
-                };
-                await db.collection(`artifacts/${appId}/public/data/inspections`).doc(docId).set(baseline);
-            };
+            const triggerDialogue = (config) => setDialogue({ ...config, isOpen: true });
+            const closeDialogue = () => setDialogue(prev => ({ ...prev, isOpen: false }));
 
-            const activeBuilding = inspections.find(b => b.id === selectedBuildingId);
-
-            if (!user) return <div className="min-h-screen flex items-center justify-center font-black text-slate-400">SYNCING PROTOCOL...</div>;
-
+            // App Views
             if (view === 'years') {
                 return (
-                    <div className="min-h-screen bg-slate-100 p-6 flex flex-col items-center justify-center">
-                        <div className="mb-8 text-center">
-                            <div className="bg-blue-600 p-4 rounded-3xl inline-block mb-4 shadow-xl text-white">
-                                <Icon name="shield-check" size={48} />
-                            </div>
-                            <h1 className="text-3xl font-black text-slate-800 tracking-tight uppercase">Fire-Doc V2</h1>
-                        </div>
-                        <div className="grid grid-cols-1 gap-4 w-full max-w-sm">
-                            {['2024', '2025', '2026'].map(y => (
-                                <button key={y} onClick={() => { setActiveYear(y); setView('buildings'); }} 
-                                        className="bg-white p-6 rounded-3xl shadow-sm flex items-center justify-between active:scale-95 transition-all">
-                                    <div className="flex items-center gap-4 font-black text-2xl text-slate-700">
-                                        <Icon name="calendar" className="text-blue-500" /> {y}
-                                    </div>
-                                    <Icon name="chevron-right" className="text-slate-300" />
+                    <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50">
+                        <img src="https://cdn-icons-png.flaticon.com/512/1042/1042680.png" className="w-24 h-24 mb-6" alt="Logo" />
+                        <h1 className="text-2xl font-black text-slate-800 uppercase mb-8">Fire-Doc Inspector</h1>
+                        <div className="w-full max-w-xs space-y-4">
+                            {['2024', '2025', '2026'].map(year => (
+                                <button key={year} onClick={() => { setActiveYear(year); setView('buildings'); }} className="w-full bg-white p-6 rounded-[32px] shadow-sm flex items-center justify-between font-black text-slate-700 active-scale-95 transition-all">
+                                    {year} Inspection Cycle <Icon name="chevron-right" />
                                 </button>
                             ))}
                         </div>
@@ -135,72 +137,45 @@
             }
 
             if (view === 'buildings') {
+                const filtered = inspections.filter(i => i.year === activeYear);
                 return (
-                    <div className="min-h-screen bg-slate-50">
-                        <header className="bg-blue-600 text-white p-8 pb-16 rounded-b-[48px] shadow-xl">
-                            <button onClick={() => setView('years')} className="text-xs font-black mb-4 opacity-70 uppercase tracking-widest flex items-center gap-1">
-                                <Icon name="arrow-left" size={12} /> Return
-                            </button>
-                            <h1 className="text-3xl font-black tracking-tight uppercase">{activeYear} Properties</h1>
+                    <div className="min-h-screen">
+                        <header className="bg-blue-600 text-white p-10 pb-20 rounded-b-[60px] shadow-lg">
+                            <button onClick={() => setView('years')} className="text-[10px] font-black uppercase opacity-60 mb-4">Back</button>
+                            <h2 className="text-3xl font-black uppercase tracking-tight">Properties</h2>
                         </header>
-                        <div className="px-6 -mt-10 space-y-4 pb-24">
-                            {inspections.filter(i => i.year === activeYear).map(b => (
-                                <div key={b.id} onClick={() => { setSelectedBuildingId(b.id); setView('inspect'); }} 
-                                     className="bg-white p-6 rounded-[32px] shadow-md flex items-center justify-between active:scale-95 transition-all cursor-pointer">
-                                    <div className="flex items-center gap-5">
-                                        <div className="p-4 rounded-2xl bg-blue-50 text-blue-500">
-                                            <Icon name="building-2" size={28} />
-                                        </div>
-                                        <div>
-                                            <h3 className="font-black text-lg text-slate-800 leading-tight uppercase">{b.name}</h3>
-                                            <p className="text-[10px] text-slate-400 font-black uppercase tracking-tight">Status: {b.completed ? 'Complete' : 'Active'}</p>
-                                        </div>
+                        <div className="p-6 -mt-10 space-y-4">
+                            {filtered.length > 0 ? filtered.map(b => (
+                                <div key={b.id} onClick={() => { setSelectedBuildingId(b.id); setView('inspect'); }} className="bg-white p-6 rounded-[32px] shadow-md flex items-center justify-between">
+                                    <div className="flex items-center gap-4">
+                                        <div className="bg-blue-50 p-3 rounded-2xl text-blue-600"><Icon name="building" size={24} /></div>
+                                        <span className="font-black text-slate-800 uppercase text-sm">{b.name}</span>
                                     </div>
                                     <Icon name="chevron-right" className="text-slate-300" />
                                 </div>
-                            ))}
+                            )) : (
+                                <div className="text-center p-12 text-slate-300 font-black uppercase text-xs">No Records Found</div>
+                            )}
                         </div>
                     </div>
                 );
             }
 
-            if (view === 'inspect' && activeBuilding) {
-                return (
-                    <div className="min-h-screen bg-slate-50 pb-24">
-                        <header className="bg-white border-b sticky top-0 z-20 p-5 flex items-center justify-between shadow-sm">
-                            <button onClick={() => setView('buildings')} className="text-blue-600 font-black text-[10px] uppercase">Back</button>
-                            <div className="text-center">
-                                <h2 className="font-black text-slate-800 text-[11px] uppercase">{activeBuilding.name}</h2>
-                            </div>
-                            <div className="w-10"></div>
-                        </header>
-                        
-                        <div className="p-6">
-                            <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100 mb-6">
-                                <h3 className="text-blue-600 font-black text-xs uppercase mb-4 tracking-widest">Inspection Summary</h3>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="bg-slate-50 p-4 rounded-2xl">
-                                        <p className="text-[8px] font-black text-slate-400 uppercase">Year</p>
-                                        <p className="text-lg font-black text-slate-700">{activeBuilding.year}</p>
-                                    </div>
-                                    <div className="bg-slate-50 p-4 rounded-2xl">
-                                        <p className="text-[8px] font-black text-slate-400 uppercase">Inspector</p>
-                                        <p className="text-xs font-black text-slate-700 truncate">{activeBuilding.inspector || 'Not set'}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <button onClick={() => alert('PDF Engine Ready')} className="w-full bg-slate-900 text-white p-6 rounded-[28px] font-black uppercase tracking-widest shadow-xl flex items-center justify-center gap-3">
-                                <Icon name="file-text" /> Generate Report
-                            </button>
-                        </div>
-                    </div>
-                );
-            }
+            return <div className="p-10 text-center font-black text-slate-400">Loading Inspection Interface...</div>;
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
+
+        // Handle PWA Install Display
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            setTimeout(() => document.getElementById('pwa-toast').classList.add('show'), 3000);
+        });
     </script>
+    
+    <!-- PDF and Icons Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
 </body>
 </html>
