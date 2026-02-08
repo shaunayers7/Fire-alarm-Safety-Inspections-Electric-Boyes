@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#2563eb">
     <title>Fire-Doc V2 | Professional Inspection Suite</title>
     
-    <!-- PWA Metadata -->
+    <!-- PWA Metadata - Ensure these files exist in your root folder -->
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1042/1042680.png">
     
@@ -14,12 +14,12 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
     
-    <!-- React and Babel -->
+    <!-- React and Babel (Necessary for browser-side JSX compilation) -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Firebase Compat -->
+    <!-- Firebase Compat SDKs (Standard for single-file CDN usage) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
@@ -43,9 +43,10 @@
 <body class="bg-slate-50">
     <div id="root"></div>
 
+    <!-- PWA Install Prompt -->
     <div id="pwa-toast" class="bg-blue-600 text-white px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-4">
         <span class="text-xs font-bold">Add to Home Screen?</span>
-        <button onclick="this.parentElement.classList.remove('show')" class="bg-white text-blue-600 px-4 py-1 rounded-full text-[10px] font-black uppercase">Install</button>
+        <button id="install-button" class="bg-white text-blue-600 px-4 py-1 rounded-full text-[10px] font-black uppercase">Install</button>
     </div>
 
     <script type="text/babel">
@@ -56,6 +57,7 @@
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
+        // Firebase Setup
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "" };
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'fire-doc-v2-prod';
 
@@ -70,7 +72,7 @@
             const [activeYear, setActiveYear] = useState('2025');
             const [loading, setLoading] = useState(true);
 
-            // Auth Logic
+            // 1. Authentication Lifecycle
             useEffect(() => {
                 const initAuth = async () => {
                     try {
@@ -79,16 +81,20 @@
                         } else {
                             await auth.signInAnonymously();
                         }
-                    } catch (e) { console.error("Auth error:", e); }
+                    } catch (e) { 
+                        console.error("Auth initialization failed:", e); 
+                        setLoading(false);
+                    }
                 };
                 initAuth();
-                return auth.onAuthStateChanged((u) => {
+                const unsubscribe = auth.onAuthStateChanged((u) => {
                     setUser(u);
                     if (u) setLoading(false);
                 });
+                return () => unsubscribe();
             }, []);
 
-            // Data Listener + Baseline Creator
+            // 2. Data Synchronization & Baseline Logic
             useEffect(() => {
                 if (!user) return;
                 const path = `artifacts/${appId}/public/data/inspections`;
@@ -96,7 +102,7 @@
                     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                     
                     if (docs.length === 0) {
-                        // Create baseline if DB is empty to prevent white screen
+                        // Ensure the screen is never blank by providing a first record
                         db.collection(path).add({
                             name: "LDS Church Welling FM Group",
                             year: "2025",
@@ -107,8 +113,9 @@
                     } else {
                         setInspections(docs);
                     }
+                    setLoading(false);
                 }, err => {
-                    console.error("Firestore error:", err);
+                    console.error("Firestore connectivity error:", err);
                     setLoading(false);
                 });
                 return () => unsubscribe();
@@ -119,7 +126,7 @@
                     <div className="min-h-screen flex items-center justify-center bg-slate-50">
                         <div className="text-center">
                             <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Initializing Session</p>
+                            <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Initializing Secure Session</p>
                         </div>
                     </div>
                 );
@@ -184,9 +191,30 @@
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
 
+        // --- SERVICE WORKER & PWA REGISTRATION ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js').then(reg => {
+                    console.log('SW Registered', reg);
+                }).catch(err => console.log('SW Failed', err));
+            });
+        }
+
+        let deferredPrompt;
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
-            setTimeout(() => document.getElementById('pwa-toast').classList.add('show'), 3000);
+            deferredPrompt = e;
+            const toast = document.getElementById('pwa-toast');
+            if(toast) setTimeout(() => toast.classList.add('show'), 3000);
+        });
+
+        document.getElementById('install-button')?.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                deferredPrompt = null;
+                document.getElementById('pwa-toast').classList.remove('show');
+            }
         });
     </script>
     
